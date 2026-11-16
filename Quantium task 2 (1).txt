@@ -1,0 +1,156 @@
+
+#load required libraries and dataset 
+
+##load libraries
+library(data.table) 
+library(ggplot2) 
+library(readr) 
+library(readxl) 
+library(dplyr) 
+library(stringr)
+library(tidyr)
+
+##load dataset
+QVI_data = read_csv("C:/Users/New/Downloads/QVI_data.csv") 
+View(QVI_data)
+
+##Set themes for plots
+theme_set(theme_bw())
+theme_update(plot.title = element_text(hjust = 0.5))
+
+##The client has selected store numbers 77, 86 and 88 as trial stores
+##We need to match control store prior to trial period [Feb, 2029]
+
+##add column for yyyymm
+setDT(QVI_data)
+QVI_data[, YEARMONTH := format(DATE, "%Y%m")]
+
+##define the measure calculations to use during the analysis.
+measures <- QVI_data[, .(sum_sales = sum(TOT_SALES),
+  sum_cust = uniqueN(LYLTY_CARD_NBR),
+  trans_per_cust = uniqueN(TXN_ID) / uniqueN(LYLTY_CARD_NBR),
+  chips_per_cust = sum(PROD_QTY) / uniqueN(LYLTY_CARD_NBR),
+  avg_unit_price = sum(TOT_SALES) / sum(PROD_QTY)), by = .(STORE_NBR, YEARMONTH)]
+View(measures)
+
+##filter to the pre-trial period and stores with full observation periods
+Stores_full_obs <- unique(measures[, .N, STORE_NBR][N == 12, STORE_NBR])
+pretrial_measures <- measures[YEARMONTH < 201902 & STORE_NBR %in% Stores_full_obs, ]
+View(pretrial_measures)
+
+##Create a function to calculate correlation for a measure, looping through each control store
+##let Input_table be metric table with potential comparison stores
+##let Metrics be measure for calculating correlation
+##let Trial_store be the store to which input stores will be compared. 
+
+Cal_corr <- function(Input_table, Metrics, Trial_store) {
+  calc_corr_table = data.table(store1 = numeric(), store2 = numeric(), corr_measure = numeric())
+  store_numbers <- unique(Input_table[, STORE_NBR])
+  for (i in store_numbers) {
+      cal_measure = data.table("store1" = Trial_store, 
+                                     "store2" = i, 
+                                     "corr_measure" = cor(Input_table[STORE_NBR == 
+                                                                        Trial_store, eval(Metrics)],
+                                                          Input_table[STORE_NBR == i,
+                                                                      eval(Metrics)])
+      )                            
+      calc_corr_table <- rbind(calc_corr_table, cal_measure)}
+  return(calc_corr_table)
+}
+
+
+##Create a function to calculate correlation for a measure, looping through each control store
+Cal_mag_distance <- function(Input_table, Metrics, Trial_store) {
+  calc_dist_table = data.table(store1 = numeric(), store2 = numeric(), YEARMONTH = 
+                               numeric(), measure = numeric())
+  store_numbers <- unique(Input_table[, STORE_NBR])
+  
+  for (i in store_numbers) {
+    cal_measure = data.table("store1" = Trial_store, 
+                            "store2" = i,
+                            "YEARMONTH" = Input_table[STORE_NBR == Trial_store, YEARMONTH],
+                            "measure" = abs(Input_table[STORE_NBR == Trial_store, eval(Metrics)]
+                                                     - Input_table[STORE_NBR == i,eval(Metrics)])
+    )
+    calc_dist_table <- rbind(calc_dist_table, cal_measure)
+  }
+  min_max_dist = calc_dist_table[, .(min_dist = min(measure), max_dist = max(measure)), 
+                             by = c("store1", "YEARMONTH")]
+  dist_table = merge(calc_dist_table, min_max_dist, by = c("store1", "YEARMONTH"))
+  dist_table[, magnitude_measure := 1 - (measure - min_dist)/(max_dist - min_dist)]
+  
+  final_dist_table <- dist_table[, .(mag_measure = mean(magnitude_measure)), by = 
+                                .(store1, store2)]
+  return(final_dist_table)
+}
+
+
+##lets make use of the function for trial store 77
+
+Trial_store = 77
+corr_sum_sales <- Cal_corr(pretrial_measures, quote(sum_sales), Trial_store)
+corr_sum_cust <- Cal_corr(pretrial_measures, quote(sum_cust), Trial_store)
+corr_sum_sales
+corr_sum_cust
+
+mag_sum_sales <- Cal_mag_distance(pretrial_measures, quote(sum_sales), Trial_store)
+mag_sum_cust <- Cal_mag_distance(pretrial_measures, quote(sum_cust), Trial_store)
+mag_sum_sales
+mag_sum_cust
+
+##Lets create a combined score composed of correlation and magnitude,
+score_nSales <- merge(corr_sum_sales, mag_sum_sales, by = c("store1", "store2") )[, scoreNsales := corr_measure * 0.5 + 
+                                                                                   mag_measure * 0.5]
+
+score_nCustomers <- merge(corr_sum_cust, mag_sum_cust, by = c("store1", "store2") )[, scoreNcust := corr_measure * 0.5 + 
+                                                                                       mag_measure * 0.5]
+  
+score_control <- merge(score_nSales, score_nCustomers, by = c("store1", "store2")) [, final_cont_score := scoreNsales * 0.5 + 
+                                                                                     scoreNcust * 0.5]
+score_control
+
+##select the store that is most similar to store 77
+control_store77 <- score_control[order(-final_cont_score)][1:2]
+control_store77
+##The best match to trial store number 77 is store 46
+control_store_no = 46
+
+
+##Check visually if the sales and customers data for trial and control store in Pre-trial period are similar.
+measure_sales <- measures
+measure_sales[, YEARMONTH := as.numeric(YEARMONTH)]
+past_sales <- measure_sales[, store_type := ifelse(STORE_NBR == Trial_store, 
+                                                         "Trial",
+                                                         ifelse(STORE_NBR == control_store_no, 
+                                                                "Control", "Other stores"))
+][, tot_sales := mean(sum_sales), by = c("YEARMONTH", 
+                                       "store_type")
+][, TransactionMonth := as.Date(paste(YEARMONTH %/% 
+                                        100, YEARMONTH %% 100, 1, sep = "-"), "%Y-%m-%d")
+][YEARMONTH < 201903 , ]
+
+View(past_sales)
+
+ggplot(past_sales, aes(TransactionMonth, tot_sales, color = store_type)) +
+  geom_line() +
+  labs(x = "Month of operation", y = "Total sales", title = "Total sales by month")
+
+
+
+measure_cust <- measures
+measure_cust[, YEARMONTH := as.numeric(YEARMONTH)]
+past_cust <- measure_cust[, store_type := ifelse(STORE_NBR == Trial_store, 
+                                                  "Trial",
+                                                  ifelse(STORE_NBR == control_store_no, 
+                                                         "Control", "Other stores"))
+][, tot_cust := mean(sum_cust), by = c("YEARMONTH", 
+                                         "store_type")
+][, TransactionMonth := as.Date(paste(YEARMONTH %/% 
+                                        100, YEARMONTH %% 100, 1, sep = "-"), "%Y-%m-%d")
+][YEARMONTH < 201903 , ]
+
+View(past_cust)
+
+ggplot(past_cust, aes(TransactionMonth, tot_cust, color = store_type)) +
+  geom_line() +
+  labs(x = "Month of operation", y = "Total customers", title = "Total number of customers by month")
