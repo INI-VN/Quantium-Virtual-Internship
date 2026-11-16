@@ -1,0 +1,243 @@
+#load required libraries and dataset
+
+##first we insstall packages
+install.packages("data.table")
+install.packages("dplyr")
+install.packages("ggplot2")
+install.packages("readr")
+install.packages("readxl")
+install.packages("stringr")
+install.packages("ggmosaic")
+##ggmosaic is no longer available on CRAN repository at the time of this analysis
+
+##next we load required libraries
+library(data.table)
+library(ggplot2)
+library(readr)
+library(readxl)
+library(dplyr)
+library(stringr)
+
+
+##import and view datasets
+Transdata = read_excel("C:/Users/New/Downloads/QVI_transaction_data.xlsx")
+View(Transdata)
+
+PBdata = read_csv("C:/Users/New/Downloads/QVI_purchase_behaviour.csv")
+View(PBdata)
+
+#exploratory data analysis
+
+##examine transaction data
+head(Transdata)
+
+###change DATE column to date format
+Transdata$DATE = as.Date(Transdata$DATE, origin = "1899-12-30")
+
+###create summary of product name
+summary(Transdata$PROD_NAME)
+
+###examine the words in product name column
+productWords = data.table(unlist(strsplit(unique(Transdata$PROD_NAME), " ")))
+setnames(productWords, 'words')
+view(productWords)
+
+###remove special characters except alphabets and numbers
+Transdata$PROD_NAME = gsub("[^A-Za-z0-9 ]", "", Transdata$PROD_NAME)
+
+###viewing the most common words
+wordFrequency = productWords[, .N, by = words]
+setorder(wordFrequency, -N)
+head(wordFrequency, 10)
+
+###remove rows with salsa from the dataset
+setDT(Transdata)
+Transdata[, SALSA := grepl("salsa", tolower(PROD_NAME))]
+Transdata = Transdata[SALSA == FALSE, ][, SALSA := NULL]
+View(productWords)
+
+###summarize the dataset
+summary(Transdata)
+
+###summarize product quantity in Transdata dataset
+Transdata_by_quant <- Transdata %>% group_by(PROD_QTY) %>% summarise(Number_of_Transactions = n())
+Transdata_by_quant
+
+###It is clear that prod_qty 200 in an outlier, hence the below steps not necessary
+
+###view outlier in the dataset
+###Q1 = quantile(Transdata$PROD_QTY, 0.25, na.rm = TRUE)
+###Q3 = quantile(Transdata$PROD_QTY, 0.75, na.rm = TRUE)
+###IQR_value = Q3 - Q1
+###lower = Q1 - 1.5 * IQR_value
+###upper = Q3 + 1.5 * IQR_value
+###outliers = Transdata[PROD_QTY < lower | PROD_QTY > upper, ]
+###View(outliers)
+
+###remove outliers from the dataset
+###Transdatax = Transdata[Transdata$PROD_QTY >= lower & Transdata$PROD_QTY <= upper,]
+###View(Transdatax)
+
+###remove outlier (prod_qty 200) from the dataset
+Transdata_new = Transdata[Transdata$PROD_QTY < 200,]
+summary(Transdata_new)
+
+###count transaction dates in Transdata dataset
+Transdata_by_date = Transdata_new %>% group_by(DATE) %>% summarise(Number_of_Transactions = n())
+Transdata_by_date
+
+###Setting plot themes to format graphs
+theme_set(theme_bw())
+theme_update(plot.title = element_text(hjust = 0.5))
+
+###Plot transactions over time
+ggplot(Transdata_by_date, aes(x = DATE, y = Number_of_Transactions)) +
+  geom_line() +
+  labs(x = "Day", y = "Number of transactions", title = "Transactions over time") +
+  scale_x_date(breaks = "1 month") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+###We can see a spike in December. Lets zoom in on this month
+
+###create a dataset for December
+Transdata_Dec = Transdata_new %>% filter(format(DATE, "%m") == "12")
+Transdata_Dec
+
+###group the December dataset by date
+Transdata_Dec_by_date = Transdata_Dec %>% group_by(DATE) %>% summarise(Number_of_Transactions = n())
+Transdata_Dec_by_date
+
+###Table shows that there was no sale on the 25th of December, 2026. Apparently due to Christmas
+###Let us chart this
+ggplot(Transdata_Dec_by_date, aes(x = DATE, y = Number_of_Transactions)) +
+  geom_line() +
+  labs(x = "Day", y = "Number of transactions", title = "Transactions over time") +
+  scale_x_date(breaks = "1 week") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+### Extract pack size from the digits that are in PROD_NAME
+Transdata_new[, PACK_SIZE := parse_number(PROD_NAME)]
+
+### Checking output of pack size
+Transdata_new[, .N, PACK_SIZE][order(PACK_SIZE)]
+
+###create an histogram showing distribution of pack size
+ggplot(Transdata_new, aes(x = PACK_SIZE)) +
+  geom_histogram() +
+  labs(x = "PACK_SIZE", y = "Frequency", title = "Transactions per pack size")
+
+### Extract brand name from the digits that are in PROD_NAME
+Transdata_new[, PACK_BRAND := word(PROD_NAME, 1)]
+
+### Checking output of pack brand
+Transdata_new[, .N, PACK_BRAND][order(PACK_BRAND)]
+
+### Clean brand names
+Transdata_new[PACK_BRAND == "Red", PACK_BRAND := "RRD"]
+Transdata_new[PACK_BRAND == "Dorito", PACK_BRAND := "Doritos"]
+Transdata_new[PACK_BRAND == "Infzns", PACK_BRAND := "Infuzions"]
+Transdata_new[PACK_BRAND == "Smith", PACK_BRAND := "Smiths"]
+Transdata_new[PACK_BRAND == "Snbts", PACK_BRAND := "Sunbites"]
+Transdata_new[PACK_BRAND == "Woolworths", PACK_BRAND := "WW"]
+
+### Checking output of pack brand again
+Transdata_new[, .N, PACK_BRAND][order(PACK_BRAND)]
+
+##customer purchase data
+
+###examine customer's purchase behaviour dataset
+head(PBdata)
+summary(PBdata)
+
+###check distribution of columns 
+setDT(PBdata)
+PBdata_by_LS = PBdata %>% group_by(LIFESTAGE) %>% summarise(Frequency = n())
+PBdata_by_LS
+
+PBdata_by_sub = PBdata %>% group_by(PREMIUM_CUSTOMER) %>% summarise(Frequency = n())
+PBdata_by_sub
+
+#Check if null values exist in both dataset
+any(is.na(Transdata_new))
+any(is.na(PBdata))
+#There are no null values in our dataset
+
+# Merge transaction data to customer data
+comp_data = merge(Transdata_new, PBdata, all.x = TRUE)
+comp_data
+any(is.na(comp_data))
+
+#save data to computer desktop
+fwrite(comp_data,"C:/Users/New/Desktop/comp_data.csv")
+
+#data analysis
+
+##Who spends the most on chips (total sales), describing customers by lifestage and how premium their general purchasing behaviour is
+sales_by_LS_sub = comp_data %>% group_by(LIFESTAGE, PREMIUM_CUSTOMER) %>% summarise(TOTAL_SALES = sum(TOT_SALES, na.rm = TRUE)) %>%
+  arrange(desc(TOTAL_SALES))
+sales_by_LS_sub
+###Sales are coming mainly from Budget - older families, Mainstream - young singles/couples, and Mainstream - retirees
+
+
+##How many customers are in each segment
+###remove duplicate Loyalty card number
+mini_data_LB_Sub = comp_data %>% select(LYLTY_CARD_NBR, LIFESTAGE, PREMIUM_CUSTOMER) %>%
+  distinct(LYLTY_CARD_NBR, .keep_all = TRUE)
+mini_data_LB_Sub
+
+cust_by_LS_sub = mini_data_LB_Sub %>% group_by(LIFESTAGE, PREMIUM_CUSTOMER) %>% summarise(COUNT_CUSTOMERS = n()) %>%
+  arrange(desc(COUNT_CUSTOMERS))
+cust_by_LS_sub
+
+###plot chart 1
+ggplot(cust_by_LS_sub, aes(x = LIFESTAGE, y = COUNT_CUSTOMERS, fill = PREMIUM_CUSTOMER)) +
+  geom_col(position = "dodge") +
+  labs(x = "Lifestage", y = "No of Customers", title = "Customers by Lifestage and Subscription", fill = "Subscription") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+###plot chart 2
+ggplot(cust_by_LS_sub, aes(x = LIFESTAGE, y = COUNT_CUSTOMERS, fill = PREMIUM_CUSTOMER)) +
+  geom_col() +
+  labs(x = "Lifestage", y = "No of Customers", title = "Customers by Lifestage and Subscription", fill = "Subscription") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+###Mainstream customers are major drivers in the young singles/couples and retirees. This is not exactly same for older singles/couples
+
+
+##How many chips are bought per customer by segment
+qty_by_LS_sub = comp_data %>% group_by(LIFESTAGE, PREMIUM_CUSTOMER) %>% summarise(TOT_PROD_QTY = sum(PROD_QTY, na.rm = TRUE)) %>%
+  arrange(desc(TOT_PROD_QTY))
+qty_by_LS_sub
+
+###plot chart
+ggplot(qty_by_LS_sub, aes(x = LIFESTAGE, y = TOT_PROD_QTY, fill = PREMIUM_CUSTOMER)) +
+  geom_col() +
+  labs(x = "Lifestage", y = "Quanity of Products", title = "Product Quantity by Lifestage and Subscription", fill = "Subscription") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+###Older singles/families bought more chips and this could be reason for more sales for this category
+
+##What's the average chip price by customer segment
+avg_price_by_LS_sub = comp_data %>% group_by(LIFESTAGE, PREMIUM_CUSTOMER) %>% summarise(AVG_PRICE = mean(TOT_SALES/PROD_QTY, na.rm = TRUE)) %>%
+  arrange(desc(AVG_PRICE))
+avg_price_by_LS_sub
+
+###plot chart
+ggplot(avg_price_by_LS_sub, aes(x = LIFESTAGE, y = AVG_PRICE, fill = PREMIUM_CUSTOMER)) +
+  geom_col() +
+  labs(x = "Lifestage", y = "Avg Chip Price", title = "Average Chip Price by Lifestage and Subscription", fill = "Subscription") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+##Lets us t-test to clearly see the differences
+
+###t-test
+comp_data$AVG_PRICE <- comp_data$TOT_SALES / comp_data$PROD_QTY
+
+#### mainstream vs premium
+t.test(AVG_PRICE ~ PREMIUM_CUSTOMER, data = comp_data %>%
+         filter(PREMIUM_CUSTOMER %in% c("Mainstream", "Premium")))
+#####t = 11.057, df = 137767, p-value < 2.2e-16
+#####there is significance difference in the average unit price of mainstream and premium...with mainstream having higher mean
+
+#### mainstream vs budget
+t.test(AVG_PRICE ~ PREMIUM_CUSTOMER, data = comp_data %>%
+         filter(PREMIUM_CUSTOMER %in% c("Mainstream", "Budget")))
+#####t = -14.241, df = 179589, p-value < 2.2e-16
+#####there is significance difference in the average unit price of mainstream and budget...with mainstream having higher mean
